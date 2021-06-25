@@ -15,9 +15,11 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/aws/aws-sdk-go/service/ses"
 )
 
 type Ticker struct {
@@ -64,8 +66,9 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		activeThreads--
 	}
 
+	t := time.Now().Local()
 	result := Result{
-		CreatedAt: time.Now().Local().Format("2006-01-02"),
+		CreatedAt: t.Format("2006-01-02"),
 		Body:      tickers,
 	}
 
@@ -78,10 +81,15 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	}
 
 	// file upload to s3
-	if err := UploadFile(b); err != nil {
+	if err := UploadFile(b, t); err != nil {
 		res.StatusCode = http.StatusInternalServerError
 		res.Body = err.Error()
 		return res, err
+	}
+
+	// send mail
+	if err := SenderMail(result); err != nil {
+		fmt.Println(err)
 	}
 
 	res.StatusCode = http.StatusOK
@@ -108,7 +116,7 @@ func GetTickerSymbles() []Ticker {
 }
 
 // UploadFile is an uploader, make json file to S3 upload.
-func UploadFile(b []byte) error {
+func UploadFile(b []byte, t time.Time) error {
 	sess, err := session.NewSession(&aws.Config{
 		Region: aws.String(endpoints.ApNortheast1RegionID),
 	})
@@ -116,10 +124,11 @@ func UploadFile(b []byte) error {
 		return err
 	}
 
+	filePath := fmt.Sprintf(os.Getenv("S3_FILE_PATH"), t.Year(), t.Month())
 	uploader := s3manager.NewUploader(sess)
 	_, err = uploader.Upload(&s3manager.UploadInput{
 		Bucket: aws.String(os.Getenv("BUCKET")),
-		Key:    aws.String(os.Getenv("S3_FILE_PATH")),
+		Key:    aws.String(filePath),
 		Body:   bytes.NewReader(b),
 	})
 	if err != nil {
@@ -154,4 +163,67 @@ func GetStockPrice(symbol Ticker, doneTicker chan Ticker) {
 		Hold:   symbol.Hold,
 	}
 	doneTicker <- ticker
+}
+
+// send report mail
+func SenderMail(result Result) error {
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(endpoints.ApNortheast1RegionID),
+	})
+	if err != nil {
+		return err
+	}
+
+	var sum float64
+	var content string
+	for _, r := range result.Body {
+		earn := (r.Value - r.Bid) * float64(r.Hold)
+		c := fmt.Sprintf("%10s %10.2f %10.2f %6d %10.2f\n",
+			r.Symble, r.Bid, r.Value, r.Hold, earn)
+		content = content + c
+		sum += earn
+	}
+	content = content + fmt.Sprintln(strings.Repeat("-", 60))
+	content = content + fmt.Sprintf("%sProfit Loss: %10.2f\n", strings.Repeat(" ", 27), sum)
+
+	svc := ses.New(sess)
+	input := &ses.SendEmailInput{
+		Destination: &ses.Destination{
+			ToAddresses: []*string{
+				aws.String(os.Getenv("MAIL_TO_ADDRESS")),
+			},
+		},
+		Message: &ses.Message{
+			Body: &ses.Body{
+				Text: &ses.Content{
+					Charset: aws.String("UTF-8"),
+					Data:    aws.String(content),
+				},
+			},
+			Subject: &ses.Content{
+				Charset: aws.String("UTF-8"),
+				Data:    aws.String(os.Getenv("MAIL_SUBJECT")),
+			},
+		},
+		Source: aws.String(os.Getenv("MAIL_SENDER_ADDRESS")),
+	}
+
+	_, err = svc.SendEmail(input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case ses.ErrCodeMessageRejected:
+				return fmt.Errorf("%s, %s", ses.ErrCodeMessageRejected, aerr.Error())
+			case ses.ErrCodeMailFromDomainNotVerifiedException:
+				return fmt.Errorf("%s, %s", ses.ErrCodeMailFromDomainNotVerifiedException, aerr.Error())
+			case ses.ErrCodeConfigurationSetDoesNotExistException:
+				return fmt.Errorf("%s, %s", ses.ErrCodeConfigurationSetDoesNotExistException, aerr.Error())
+			default:
+				return fmt.Errorf("%s", aerr.Error())
+			}
+		} else {
+			return fmt.Errorf("%s", err.Error())
+		}
+	}
+	return nil
 }
