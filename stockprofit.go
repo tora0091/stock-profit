@@ -178,12 +178,12 @@ func SenderMail(result Result) error {
 	var content string
 	for _, r := range result.Body {
 		earn := (r.Value - r.Bid) * float64(r.Hold)
-		c := fmt.Sprintf("%10s %10.2f %10.2f %6d %10.2f\n",
+		c := fmt.Sprintf("%s %10.2f %10.2f %6d %10.2f\n",
 			r.Symble, r.Bid, r.Value, r.Hold, earn)
 		content = content + c
 		sum += earn
 	}
-	content = content + fmt.Sprintln(strings.Repeat("-", 60))
+	content = content + fmt.Sprintln(strings.Repeat("-", 30))
 	content = content + fmt.Sprintf("%sProfit Loss: %10.2f\n", strings.Repeat(" ", 27), sum)
 
 	svc := ses.New(sess)
