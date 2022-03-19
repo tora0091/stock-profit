@@ -102,12 +102,12 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 func GetTickerSymbles() []Ticker {
 	return []Ticker{
 		{"AMD", 88.01, 0.0, 30},
-		{"AMZN", 3258.88, 0.0, 5},
+		{"AMZN", 3244.29, 0.0, 6},
 		{"COST", 321.17, 0.0, 5},
 		{"CRM", 223.67, 0.0, 5},
 		{"GOOGL", 2058.39, 0.0, 2},
 		{"LMT", 333.27, 0.0, 10},
-		{"NVDA", 139.21, 0.0, 20},
+		{"NVDA", 174.04, 0.0, 30},
 		{"OPEN", 22.51, 0.0, 10},
 		{"PYPL", 265.08, 0.0, 5},
 		{"SPCE", 32.71, 0.0, 10},
