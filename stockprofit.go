@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/ses"
 )
@@ -53,11 +55,18 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		return res, fmt.Errorf("status bad request. %d", http.StatusBadRequest)
 	}
 
+	data, err := DownloadFile()
+	if err != nil {
+		res.StatusCode = http.StatusInternalServerError
+		res.Body = err.Error()
+		return res, err
+	}
+
 	activeThreads := 0
 	doneTicker := make(chan Ticker)
 
 	var tickers []Ticker
-	for _, symbol := range GetTickerSymbles() {
+	for _, symbol := range GetTickerSymbles(data) {
 		go GetStockPrice(symbol, doneTicker)
 		activeThreads++
 	}
@@ -99,21 +108,40 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 }
 
 // GetTickerSymbles is my stock symbole.
-func GetTickerSymbles() []Ticker {
-	return []Ticker{
-		{"AMD", 88.01, 0.0, 30},
-		{"AMZN", 3244.29, 0.0, 6},
-		{"COST", 321.17, 0.0, 5},
-		{"CRM", 223.67, 0.0, 5},
-		{"GOOGL", 2058.39, 0.0, 2},
-		{"LMT", 333.27, 0.0, 10},
-		{"NVDA", 174.04, 0.0, 30},
-		{"OPEN", 22.51, 0.0, 10},
-		{"PYPL", 265.08, 0.0, 5},
-		{"SPCE", 32.71, 0.0, 10},
-		{"V", 216.96, 0.0, 5},
-		{"ZG", 169.71, 0.0, 10},
+func GetTickerSymbles(buf []byte) []Ticker {
+	var tickers []Ticker
+
+	for {
+		advance, token, err := bufio.ScanLines(buf, false)
+		if err != nil {
+			return nil
+		}
+		if advance == 0 {
+			break
+		}
+
+		stocks := strings.Split(string(token), ",")
+
+		if len(stocks) == 4 {
+			symble := stocks[0]
+			bid, _ := strconv.ParseFloat(stocks[1], 64)
+			value, _ := strconv.ParseFloat(stocks[2], 64)
+			hold, _ := strconv.Atoi(stocks[3])
+
+			t := Ticker{
+				Symble: symble,
+				Bid:    bid,
+				Value:  value,
+				Hold:   hold,
+			}
+			tickers = append(tickers, t)
+		}
+
+		if advance <= len(buf) {
+			buf = buf[advance:]
+		}
 	}
+	return tickers
 }
 
 // UploadFile is an uploader, make json file to S3 upload.
@@ -136,6 +164,32 @@ func UploadFile(b []byte, t time.Time) error {
 		return err
 	}
 	return nil
+}
+
+// DownloadFile get a stock data file
+func DownloadFile() ([]byte, error) {
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String(endpoints.ApNortheast1RegionID),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	filePath := os.Getenv("S3_STOCK_DATA")
+	svc := s3.New(sess)
+	obj, err := svc.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(os.Getenv("BUCKET")),
+		Key:    aws.String(filePath),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Body.Close()
+
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(obj.Body)
+
+	return buf.Bytes(), nil
 }
 
 // GetStockPrice is get stock price from yahoo finance web page.
