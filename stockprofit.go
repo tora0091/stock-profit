@@ -195,7 +195,20 @@ func DownloadFile() ([]byte, error) {
 // GetStockPrice is get stock price from yahoo finance web page.
 func GetStockPrice(symbol Ticker, doneTicker chan Ticker) {
 	url := fmt.Sprintf("https://finance.yahoo.com/quote/%s", symbol.Symble)
-	doc, err := goquery.NewDocument(url)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		doneTicker <- Ticker{}
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		doneTicker <- Ticker{}
+		return
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		doneTicker <- Ticker{}
 		return
