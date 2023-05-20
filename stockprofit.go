@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
@@ -22,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/aws/aws-sdk-go/service/ses"
+	"github.com/gocolly/colly/v2"
 )
 
 type Ticker struct {
@@ -195,41 +195,31 @@ func DownloadFile() ([]byte, error) {
 // GetStockPrice is get stock price from yahoo finance web page.
 func GetStockPrice(symbol Ticker, doneTicker chan Ticker) {
 	url := fmt.Sprintf("https://finance.yahoo.com/quote/%s", symbol.Symble)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		doneTicker <- Ticker{}
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		doneTicker <- Ticker{}
-		return
-	}
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		doneTicker <- Ticker{}
-		return
-	}
-	text := doc.Find("div#quote-header-info").Text()
-	text = strings.ReplaceAll(text, ",", "")
-
-	result := r.FindAllStringSubmatch(text, -1)
-
-	f, err := strconv.ParseFloat(result[0][1], 64)
-	if err != nil {
-		doneTicker <- Ticker{}
-		return
-	}
+	selector := fmt.Sprintf("fin-streamer[data-symbol='%s'][data-field='regularMarketPrice']", symbol.Symble)
 
 	ticker := Ticker{
 		Symble: symbol.Symble,
 		Bid:    symbol.Bid,
-		Value:  f,
+		Value:  0.0,
 		Hold:   symbol.Hold,
 	}
+
+	c := colly.NewCollector()
+	c.OnHTML(selector, func(h *colly.HTMLElement) {
+		value, err := strconv.ParseFloat(h.Text, 64)
+		if err != nil {
+			doneTicker <- Ticker{}
+			return
+		}
+		ticker.Value = value
+	})
+
+	c.OnError(func(r *colly.Response, err error) {
+		doneTicker <- Ticker{}
+	})
+
+	c.Visit(url)
+
 	doneTicker <- ticker
 }
 
